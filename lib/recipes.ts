@@ -157,13 +157,52 @@ function toOptionalNonNegativeInt(value: unknown): number | null | "invalid" {
  * Parse recipe Markdown with YAML frontmatter (see plan section 3) into a
  * RecipeInput. Throws RecipeParseError listing every problem found.
  */
+function isFrontmatterLike(line: string): boolean {
+  const text = line.trim();
+  return text === "" || text.startsWith("- ") || text.includes(":");
+}
+
+/**
+ * AI agents often wrap the answer in code fences, add a line of intro text,
+ * or close the frontmatter with `***` instead of `---`. Normalize those
+ * shapes so a correct-looking recipe imports first try. A `***` line is only
+ * treated as the close when everything above it looks like frontmatter, so a
+ * horizontal rule in the method body is left alone.
+ */
+function normalizeAgentMarkdown(source: string): string {
+  let text = source.replace(/^\uFEFF/, "").trim();
+  const fence = text.match(/^```[\w-]*\s*\n([\s\S]*?)\n```\s*$/);
+  if (fence) text = fence[1].trim();
+  const lines = text.split("\n");
+  if (lines[0].trim() !== "---") {
+    const start = lines.findIndex((line) => line.trim() === "---");
+    if (start > 0) return lines.slice(start).join("\n");
+    return text;
+  }
+  for (let i = 1; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (line === "---") return text;
+    if ((line === "***" || line === "...") && lines.slice(1, i).every(isFrontmatterLike)) {
+      lines[i] = "---";
+      return lines.join("\n");
+    }
+  }
+  return text;
+}
+
 export function parseRecipeMarkdown(source: string): RecipeInput {
   const issues: RecipeIssue[] = [];
   let parsed: matter.GrayMatterFile<string>;
   try {
-    parsed = matter(source);
-  } catch {
-    throw new RecipeParseError([{ field: "frontmatter", message: "Frontmatter is not valid YAML." }]);
+    parsed = matter(normalizeAgentMarkdown(source));
+  } catch (error) {
+    const detail = error instanceof Error ? error.message.split("\n")[0].slice(0, 160) : "";
+    throw new RecipeParseError([
+      {
+        field: "frontmatter",
+        message: detail ? `Frontmatter is not valid YAML (${detail}).` : "Frontmatter is not valid YAML.",
+      },
+    ]);
   }
 
   const data = parsed.data ?? {};

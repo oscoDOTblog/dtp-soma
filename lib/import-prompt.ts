@@ -4,7 +4,7 @@ export const IMPORT_PROMPT = `Reformat the recipe below into Markdown for my rec
 
 Rules:
 
-1. Start with YAML frontmatter between two --- lines, then the method and notes as Markdown below it.
+1. Start with YAML frontmatter between two --- lines, then the method and notes as Markdown below it. The opening line and the closing line must each be exactly three hyphens (---). Never close with *** or ... — the import fails without the exact closing line. Do not wrap the answer in code fences and do not put any text before the opening ---.
 2. Frontmatter fields:
    - title (required): the recipe name.
    - description: one appetizing sentence. Write one if the source has none.

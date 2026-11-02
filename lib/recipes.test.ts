@@ -136,6 +136,46 @@ describe("markdown round-trip", () => {
   });
 });
 
+describe("parseRecipeMarkdown agent-paste tolerance", () => {
+  const BODY = `# Soup\n\n## Instructions\n\n1. Heat it.\n`;
+
+  function frontmatter(close: string): string {
+    return `---\ntitle: Soup\nservings: 2\n${close}\n\n${BODY}`;
+  }
+
+  it("accepts *** as the closing delimiter", () => {
+    const recipe = parseRecipeMarkdown(frontmatter("***"));
+    expect(recipe.title).toBe("Soup");
+    expect(recipe.servings).toBe(2);
+  });
+
+  it("accepts ... as the closing delimiter", () => {
+    const recipe = parseRecipeMarkdown(frontmatter("..."));
+    expect(recipe.title).toBe("Soup");
+  });
+
+  it("strips code fences around the recipe", () => {
+    const recipe = parseRecipeMarkdown(`\`\`\`markdown\n${frontmatter("---")}\n\`\`\``);
+    expect(recipe.title).toBe("Soup");
+  });
+
+  it("skips intro text before the opening delimiter", () => {
+    const recipe = parseRecipeMarkdown(`Here is your reformatted recipe:\n\n${frontmatter("---")}`);
+    expect(recipe.title).toBe("Soup");
+  });
+
+  it("does not mistake a body horizontal rule for a close", () => {
+    const recipe = parseRecipeMarkdown(`${frontmatter("---")}\n***\n`);
+    expect(recipe.title).toBe("Soup");
+    expect(recipe.bodyMarkdown).toContain("***");
+  });
+
+  it("reports the parser detail for invalid YAML", () => {
+    const issues = parseInvalid(`---\ntitle: Pasta: Quick Dinner\nservings: 2\n---\n\nBody\n`);
+    expect(issues.some((i) => i.field === "frontmatter" && i.message.includes("line 2"))).toBe(true);
+  });
+});
+
 describe("matchesQuery", () => {
   it("matches title, tag, and ingredient names", () => {
     const recipe = parseRecipeMarkdown(VALID);
