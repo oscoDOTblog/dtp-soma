@@ -41,7 +41,7 @@ Set `MONGODB_URI` in server-side env only, never in client code. See
 
 The header toggles light and dark mode; the choice persists per browser and
 otherwise follows the OS preference. While recipes load from Atlas, the library
-and detail pages show skeleton placeholders.
+and detail pages show a spinning loading indicator.
 
 The detail page can email a recipe through coss.com ("Email recipe"). It needs
 a `COSS_API_KEY`: run `npx coss-cli init` and approve the browser prompt to get
