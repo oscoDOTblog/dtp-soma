@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "skills": {
+    "coss": {
+      "source": "cosscom/coss",
+      "sourceType": "github",
+      "skillPath": "plugins/coss/skills/coss/SKILL.md",
+      "computedHash": "b6049127f1bbec522f022e44ef559813596d1594aa93d80d24038bc4e4d2982b"
+    },
+    "frontend-design": {
+      "source": "anthropics/skills",
+      "sourceType": "github",
+      "skillPath": "skills/frontend-design/SKILL.md",
+      "computedHash": "89496d5dd00f4810205f351759594fc2742bf8eea85a2f2b2d1de59f4bd91576"
+    }
+  }
+}
