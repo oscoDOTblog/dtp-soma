@@ -1,227 +1,333 @@
-import Database from "better-sqlite3";
-import fs from "node:fs";
-import path from "node:path";
+import { Collection, Db, MongoClient } from "mongodb";
 import { Ingredient, Recipe, RecipeInput, slugifyTitle } from "./recipes";
 
 /**
- * Storage boundary for recipes. SQLite is the local source of truth; a
- * future MongoDB adapter implements this same interface without changing
- * the UI contract.
+ * Storage boundary for recipes. MongoDB Atlas is the source of truth.
+ * Dev and prod live in separate collections of the same database so one
+ * Atlas cluster serves both environments without data mixing.
  */
 export interface RecipeStore {
-  list(): Recipe[];
-  get(id: string): Recipe | null;
-  create(input: RecipeInput): Recipe;
-  update(id: string, input: RecipeInput): Recipe | null;
-  remove(id: string): boolean;
-  setFavorite(id: string, favorite: boolean): Recipe | null;
-  markCooked(id: string): Recipe | null;
-  ensureUniqueId(base: string): string;
+  list(): Promise<Recipe[]>;
+  get(id: string): Promise<Recipe | null>;
+  create(input: RecipeInput): Promise<Recipe>;
+  update(id: string, input: RecipeInput): Promise<Recipe | null>;
+  remove(id: string): Promise<boolean>;
+  setFavorite(id: string, favorite: boolean): Promise<Recipe | null>;
+  markCooked(id: string): Promise<Recipe | null>;
+  ensureUniqueId(base: string): Promise<string>;
 }
 
-interface Row {
-  id: string;
+export type AppEnv = "dev" | "prod";
+
+interface RecipeDoc {
+  _id: string;
   title: string;
   description: string;
-  tags: string;
-  categories: string;
+  tags: string[];
+  categories: string[];
   image: string | null;
-  prep_minutes: number | null;
-  cook_minutes: number | null;
+  prepMinutes: number | null;
+  cookMinutes: number | null;
   servings: number;
-  ingredients: string;
-  body_markdown: string;
-  source_markdown: string;
-  favorite: number;
-  created_at: string;
-  updated_at: string;
-  last_cooked_at: string | null;
+  ingredients: Ingredient[];
+  bodyMarkdown: string;
+  sourceMarkdown: string;
+  favorite: boolean;
+  createdAt: string;
+  updatedAt: string;
+  lastCookedAt: string | null;
 }
 
-function rowToRecipe(row: Row): Recipe {
+function docToRecipe(doc: RecipeDoc): Recipe {
   return {
-    id: row.id,
-    title: row.title,
-    description: row.description,
-    tags: JSON.parse(row.tags) as string[],
-    categories: JSON.parse(row.categories) as string[],
-    image: row.image,
-    prepMinutes: row.prep_minutes,
-    cookMinutes: row.cook_minutes,
-    servings: row.servings,
-    ingredients: JSON.parse(row.ingredients) as Ingredient[],
-    bodyMarkdown: row.body_markdown,
-    sourceMarkdown: row.source_markdown,
-    favorite: row.favorite === 1,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-    lastCookedAt: row.last_cooked_at,
+    id: doc._id,
+    title: doc.title,
+    description: doc.description,
+    tags: doc.tags,
+    categories: doc.categories,
+    image: doc.image,
+    prepMinutes: doc.prepMinutes,
+    cookMinutes: doc.cookMinutes,
+    servings: doc.servings,
+    ingredients: doc.ingredients,
+    bodyMarkdown: doc.bodyMarkdown,
+    sourceMarkdown: doc.sourceMarkdown,
+    favorite: doc.favorite,
+    createdAt: doc.createdAt,
+    updatedAt: doc.updatedAt,
+    lastCookedAt: doc.lastCookedAt,
   };
 }
 
-const SCHEMA = `
-CREATE TABLE IF NOT EXISTS recipes (
-  id TEXT PRIMARY KEY,
-  title TEXT NOT NULL,
-  description TEXT NOT NULL DEFAULT '',
-  tags TEXT NOT NULL DEFAULT '[]',
-  categories TEXT NOT NULL DEFAULT '[]',
-  image TEXT,
-  prep_minutes INTEGER,
-  cook_minutes INTEGER,
-  servings REAL NOT NULL DEFAULT 2,
-  ingredients TEXT NOT NULL DEFAULT '[]',
-  body_markdown TEXT NOT NULL DEFAULT '',
-  source_markdown TEXT NOT NULL DEFAULT '',
-  favorite INTEGER NOT NULL DEFAULT 0,
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL,
-  last_cooked_at TEXT
-);
-CREATE INDEX IF NOT EXISTS idx_recipes_favorite ON recipes (favorite);
-CREATE INDEX IF NOT EXISTS idx_recipes_updated ON recipes (updated_at DESC);
-`;
-
-let db: Database.Database | null = null;
-
-export function dbPath(): string {
-  return process.env.RECIPES_DB_PATH ?? path.join(process.cwd(), "data", "recipes.db");
+/** Which environment this process serves: explicit APP_ENV wins, else NODE_ENV. */
+export function resolveAppEnv(): AppEnv {
+  const raw = (process.env.APP_ENV ?? "").trim().toLowerCase();
+  if (raw === "prod" || raw === "production") return "prod";
+  if (raw === "dev" || raw === "development") return "dev";
+  return process.env.NODE_ENV === "production" ? "prod" : "dev";
 }
 
-export function getDb(): Database.Database {
-  if (db) return db;
-  const file = dbPath();
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  db = new Database(file);
-  db.exec(SCHEMA);
-  return db;
+export function dbName(): string {
+  return process.env.MONGODB_DB ?? "dtp-soma";
+}
+
+/** Collection per environment; explicit MONGODB_COLLECTION overrides. */
+export function collectionName(env: AppEnv = resolveAppEnv()): string {
+  return process.env.MONGODB_COLLECTION ?? `soma_${env}_recipes`;
+}
+
+/** Both environment collections so a deploy creates dev AND prod tables. */
+export function devProdCollections(): { dev: string; prod: string } {
+  if (process.env.MONGODB_COLLECTION) {
+    return { dev: process.env.MONGODB_COLLECTION, prod: process.env.MONGODB_COLLECTION };
+  }
+  return { dev: "soma_dev_recipes", prod: "soma_prod_recipes" };
+}
+
+function mongoUri(): string {
+  const uri = process.env.MONGODB_URI;
+  if (!uri) throw new Error("MONGODB_URI is not set. Add it to your environment.");
+  return uri;
+}
+
+let client: MongoClient | null = null;
+let clientUri: string | null = null;
+
+export function getClient(): MongoClient {
+  const uri = mongoUri();
+  if (client && clientUri === uri) return client;
+  client = new MongoClient(uri);
+  clientUri = uri;
+  return client;
+}
+
+async function getMongoDb(): Promise<Db> {
+  const c = getClient();
+  await c.connect();
+  return c.db(dbName());
+}
+
+async function getCollection(name?: string): Promise<Collection<RecipeDoc>> {
+  const db = await getMongoDb();
+  const coll = db.collection<RecipeDoc>(name ?? collectionName());
+  await coll.createIndex({ favorite: -1, updatedAt: -1 });
+  return coll;
+}
+
+/**
+ * Create the dev and prod collections (with indexes) if they do not exist
+ * yet. Call during deploy/startup so both tables exist before traffic.
+ */
+export async function ensureDevProdCollections(): Promise<{ dev: string; prod: string }> {
+  const db = await getMongoDb();
+  const names = devProdCollections();
+  for (const name of [names.dev, names.prod]) {
+    await db.createCollection(name).catch((error: unknown) => {
+      if (
+        error instanceof Error &&
+        (error.message.includes("already exists") || "codeName" in error)
+      ) {
+        const named = error as Error & { codeName?: string };
+        if (named.codeName === "NamespaceExists" || error.message.includes("already exists")) return;
+      }
+      throw error;
+    });
+    await db.collection(name).createIndex({ favorite: -1, updatedAt: -1 });
+  }
+  return names;
 }
 
 function nowIso(): string {
   return new Date().toISOString();
 }
 
-export class SqliteRecipeStore implements RecipeStore {
-  private database: Database.Database;
+export class MongoRecipeStore implements RecipeStore {
+  private readonly collectionName: string;
 
-  constructor(database?: Database.Database) {
-    this.database = database ?? getDb();
+  constructor(collection?: string) {
+    this.collectionName = collection ?? collectionName();
   }
 
-  list(): Recipe[] {
-    const rows = this.database
-      .prepare("SELECT * FROM recipes ORDER BY favorite DESC, updated_at DESC")
-      .all() as Row[];
-    return rows.map(rowToRecipe);
+  private coll(): Promise<Collection<RecipeDoc>> {
+    return getCollection(this.collectionName);
   }
 
-  get(id: string): Recipe | null {
-    const row = this.database.prepare("SELECT * FROM recipes WHERE id = ?").get(id) as Row | undefined;
-    return row ? rowToRecipe(row) : null;
+  async list(): Promise<Recipe[]> {
+    const docs = await (await this.coll())
+      .find()
+      .sort({ favorite: -1, updatedAt: -1 })
+      .toArray();
+    return docs.map(docToRecipe);
   }
 
-  ensureUniqueId(base: string): string {
+  async get(id: string): Promise<Recipe | null> {
+    const doc = await (await this.coll()).findOne({ _id: id });
+    return doc ? docToRecipe(doc) : null;
+  }
+
+  async ensureUniqueId(base: string): Promise<string> {
     let candidate = base || "untitled-recipe";
     let n = 2;
-    while (this.get(candidate)) {
+    while (await this.get(candidate)) {
       candidate = `${base}-${n}`;
       n += 1;
     }
     return candidate;
   }
 
-  create(input: RecipeInput): Recipe {
-    const id = this.ensureUniqueId(input.id?.trim() || slugifyTitle(input.title));
+  async create(input: RecipeInput): Promise<Recipe> {
+    const id = await this.ensureUniqueId(input.id?.trim() || slugifyTitle(input.title));
     const now = nowIso();
-    this.database
-      .prepare(
-        `INSERT INTO recipes
-         (id, title, description, tags, categories, image, prep_minutes, cook_minutes,
-          servings, ingredients, body_markdown, source_markdown, favorite, created_at, updated_at, last_cooked_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
-      )
-      .run(
-        id,
-        input.title,
-        input.description,
-        JSON.stringify(input.tags),
-        JSON.stringify(input.categories),
-        input.image,
-        input.prepMinutes,
-        input.cookMinutes,
-        input.servings,
-        JSON.stringify(input.ingredients),
-        input.bodyMarkdown,
-        input.sourceMarkdown,
-        input.favorite ? 1 : 0,
-        now,
-        now,
-      );
-    const created = this.get(id);
+    const doc: RecipeDoc = {
+      _id: id,
+      title: input.title,
+      description: input.description,
+      tags: input.tags,
+      categories: input.categories,
+      image: input.image,
+      prepMinutes: input.prepMinutes,
+      cookMinutes: input.cookMinutes,
+      servings: input.servings,
+      ingredients: input.ingredients,
+      bodyMarkdown: input.bodyMarkdown,
+      sourceMarkdown: input.sourceMarkdown,
+      favorite: input.favorite,
+      createdAt: now,
+      updatedAt: now,
+      lastCookedAt: null,
+    };
+    await (await this.coll()).insertOne(doc);
+    const created = await this.get(id);
     if (!created) throw new Error("Failed to read back created recipe.");
     return created;
   }
 
-  update(id: string, input: RecipeInput): Recipe | null {
-    const existing = this.get(id);
+  async update(id: string, input: RecipeInput): Promise<Recipe | null> {
+    const result = await (await this.coll()).findOneAndUpdate(
+      { _id: id },
+      {
+        $set: {
+          title: input.title,
+          description: input.description,
+          tags: input.tags,
+          categories: input.categories,
+          image: input.image,
+          prepMinutes: input.prepMinutes,
+          cookMinutes: input.cookMinutes,
+          servings: input.servings,
+          ingredients: input.ingredients,
+          bodyMarkdown: input.bodyMarkdown,
+          sourceMarkdown: input.sourceMarkdown,
+          favorite: input.favorite,
+          updatedAt: nowIso(),
+        },
+      },
+      { returnDocument: "after" },
+    );
+    return result ? docToRecipe(result) : null;
+  }
+
+  async remove(id: string): Promise<boolean> {
+    const result = await (await this.coll()).deleteOne({ _id: id });
+    return result.deletedCount > 0;
+  }
+
+  async setFavorite(id: string, favorite: boolean): Promise<Recipe | null> {
+    const result = await (await this.coll()).findOneAndUpdate(
+      { _id: id },
+      { $set: { favorite, updatedAt: nowIso() } },
+      { returnDocument: "after" },
+    );
+    return result ? docToRecipe(result) : null;
+  }
+
+  async markCooked(id: string): Promise<Recipe | null> {
+    const now = nowIso();
+    const result = await (await this.coll()).findOneAndUpdate(
+      { _id: id },
+      { $set: { lastCookedAt: now, updatedAt: now } },
+      { returnDocument: "after" },
+    );
+    return result ? docToRecipe(result) : null;
+  }
+}
+
+/**
+ * In-memory RecipeStore for unit tests — same interface, no Atlas needed.
+ */
+export class InMemoryRecipeStore implements RecipeStore {
+  private readonly rows = new Map<string, Recipe>();
+
+  async list(): Promise<Recipe[]> {
+    return Array.from(this.rows.values()).sort((a, b) => {
+      if (a.favorite !== b.favorite) return a.favorite ? -1 : 1;
+      return b.updatedAt.localeCompare(a.updatedAt);
+    });
+  }
+
+  async get(id: string): Promise<Recipe | null> {
+    return this.rows.get(id) ?? null;
+  }
+
+  async ensureUniqueId(base: string): Promise<string> {
+    let candidate = base || "untitled-recipe";
+    let n = 2;
+    while (this.rows.has(candidate)) {
+      candidate = `${base}-${n}`;
+      n += 1;
+    }
+    return candidate;
+  }
+
+  async create(input: RecipeInput): Promise<Recipe> {
+    const id = await this.ensureUniqueId(input.id?.trim() || slugifyTitle(input.title));
+    const now = nowIso();
+    const recipe: Recipe = {
+      ...input,
+      id,
+      createdAt: now,
+      updatedAt: now,
+      lastCookedAt: null,
+    };
+    this.rows.set(id, recipe);
+    return recipe;
+  }
+
+  async update(id: string, input: RecipeInput): Promise<Recipe | null> {
+    const existing = this.rows.get(id);
     if (!existing) return null;
-    this.database
-      .prepare(
-        `UPDATE recipes SET
-           title = ?, description = ?, tags = ?, categories = ?, image = ?,
-           prep_minutes = ?, cook_minutes = ?, servings = ?, ingredients = ?,
-           body_markdown = ?, source_markdown = ?, favorite = ?, updated_at = ?
-         WHERE id = ?`,
-      )
-      .run(
-        input.title,
-        input.description,
-        JSON.stringify(input.tags),
-        JSON.stringify(input.categories),
-        input.image,
-        input.prepMinutes,
-        input.cookMinutes,
-        input.servings,
-        JSON.stringify(input.ingredients),
-        input.bodyMarkdown,
-        input.sourceMarkdown,
-        input.favorite ? 1 : 0,
-        nowIso(),
-        id,
-      );
-    return this.get(id);
+    const updated: Recipe = { ...input, id, createdAt: existing.createdAt, updatedAt: nowIso(), lastCookedAt: existing.lastCookedAt };
+    this.rows.set(id, updated);
+    return updated;
   }
 
-  remove(id: string): boolean {
-    const result = this.database.prepare("DELETE FROM recipes WHERE id = ?").run(id);
-    return result.changes > 0;
+  async remove(id: string): Promise<boolean> {
+    return this.rows.delete(id);
   }
 
-  setFavorite(id: string, favorite: boolean): Recipe | null {
-    const existing = this.get(id);
+  async setFavorite(id: string, favorite: boolean): Promise<Recipe | null> {
+    const existing = this.rows.get(id);
     if (!existing) return null;
-    this.database
-      .prepare("UPDATE recipes SET favorite = ?, updated_at = ? WHERE id = ?")
-      .run(favorite ? 1 : 0, nowIso(), id);
-    return this.get(id);
+    const updated: Recipe = { ...existing, favorite, updatedAt: nowIso() };
+    this.rows.set(id, updated);
+    return updated;
   }
 
-  markCooked(id: string): Recipe | null {
-    const existing = this.get(id);
+  async markCooked(id: string): Promise<Recipe | null> {
+    const existing = this.rows.get(id);
     if (!existing) return null;
     const now = nowIso();
-    this.database
-      .prepare("UPDATE recipes SET last_cooked_at = ?, updated_at = ? WHERE id = ?")
-      .run(now, now, id);
-    return this.get(id);
+    const updated: Recipe = { ...existing, lastCookedAt: now, updatedAt: now };
+    this.rows.set(id, updated);
+    return updated;
   }
 }
 
 let store: RecipeStore | null = null;
 
 /** Application-wide store singleton (override in tests via setStore). */
-export function getStore(): RecipeStore {
-  if (!store) store = new SqliteRecipeStore();
+export async function getStore(): Promise<RecipeStore> {
+  if (!store) store = new MongoRecipeStore();
   return store;
 }
 

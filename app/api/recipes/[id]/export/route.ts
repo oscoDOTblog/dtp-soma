@@ -7,7 +7,7 @@ interface Params {
 
 /** Download the recipe's original Markdown source. */
 export async function GET(_request: NextRequest, { params }: Params): Promise<NextResponse> {
-  const recipe = getStore().get(params.id);
+  const recipe = await (await getStore()).get(params.id);
   if (!recipe) return NextResponse.json({ error: "Recipe not found." }, { status: 404 });
   return new NextResponse(recipe.sourceMarkdown, {
     headers: {

@@ -1,4 +1,3 @@
-import Database from "better-sqlite3";
 import { describe, expect, it } from "vitest";
 import {
   RecipeParseError,
@@ -9,7 +8,7 @@ import {
   scaleIngredients,
   serializeRecipeMarkdown,
 } from "./recipes";
-import { SqliteRecipeStore } from "./store";
+import { InMemoryRecipeStore, collectionName, devProdCollections, resolveAppEnv } from "./store";
 
 const VALID = `---
 id: kimchi-fried-rice
@@ -147,34 +146,64 @@ describe("matchesQuery", () => {
   });
 });
 
-describe("SqliteRecipeStore", () => {
-  function memoryStore(): SqliteRecipeStore {
-    const database = new Database(":memory:");
-    database.exec(
-      "CREATE TABLE recipes (id TEXT PRIMARY KEY, title TEXT NOT NULL, description TEXT NOT NULL DEFAULT '', tags TEXT NOT NULL DEFAULT '[]', categories TEXT NOT NULL DEFAULT '[]', image TEXT, prep_minutes INTEGER, cook_minutes INTEGER, servings REAL NOT NULL DEFAULT 2, ingredients TEXT NOT NULL DEFAULT '[]', body_markdown TEXT NOT NULL DEFAULT '', source_markdown TEXT NOT NULL DEFAULT '', favorite INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, last_cooked_at TEXT);",
-    );
-    return new SqliteRecipeStore(database);
-  }
+describe("InMemoryRecipeStore", () => {
+  it("creates, favorites, marks cooked, exports, and deletes", async () => {
+    const store = new InMemoryRecipeStore();
+    const created = await store.create({ ...parseRecipeMarkdown(VALID), sourceMarkdown: VALID });
+    expect((await store.get(created.id))?.title).toBe("Kimchi Fried Rice");
 
-  it("creates, favorites, marks cooked, exports, and deletes", () => {
-    const store = memoryStore();
-    const created = store.create({ ...parseRecipeMarkdown(VALID), sourceMarkdown: VALID });
-    expect(store.get(created.id)?.title).toBe("Kimchi Fried Rice");
-
-    const favorited = store.setFavorite(created.id, true);
+    const favorited = await store.setFavorite(created.id, true);
     expect(favorited?.favorite).toBe(true);
 
-    const cooked = store.markCooked(created.id);
+    const cooked = await store.markCooked(created.id);
     expect(cooked?.lastCookedAt).not.toBeNull();
 
-    expect(store.remove(created.id)).toBe(true);
-    expect(store.get(created.id)).toBeNull();
+    expect(await store.remove(created.id)).toBe(true);
+    expect(await store.get(created.id)).toBeNull();
   });
 
-  it("keeps ids unique", () => {
-    const store = memoryStore();
-    const first = store.create({ ...parseRecipeMarkdown(VALID), sourceMarkdown: VALID });
-    const second = store.create({ ...parseRecipeMarkdown(VALID), sourceMarkdown: VALID });
+  it("keeps ids unique", async () => {
+    const store = new InMemoryRecipeStore();
+    const first = await store.create({ ...parseRecipeMarkdown(VALID), sourceMarkdown: VALID });
+    const second = await store.create({ ...parseRecipeMarkdown(VALID), sourceMarkdown: VALID });
     expect(second.id).not.toBe(first.id);
+  });
+});
+
+describe("dev/prod collections", () => {
+  it("resolves the environment from APP_ENV first, then NODE_ENV", () => {
+    const env = process.env as Record<string, string | undefined>;
+    const prevApp = env.APP_ENV;
+    const prevNode = env.NODE_ENV;
+    try {
+      env.APP_ENV = "prod";
+      env.NODE_ENV = "development";
+      expect(resolveAppEnv()).toBe("prod");
+      expect(collectionName()).toBe("soma_prod_recipes");
+
+      env.APP_ENV = "dev";
+      expect(resolveAppEnv()).toBe("dev");
+      expect(collectionName()).toBe("soma_dev_recipes");
+
+      delete env.APP_ENV;
+      env.NODE_ENV = "production";
+      expect(resolveAppEnv()).toBe("prod");
+    } finally {
+      if (prevApp === undefined) delete env.APP_ENV;
+      else env.APP_ENV = prevApp;
+      if (prevNode === undefined) delete env.NODE_ENV;
+      else env.NODE_ENV = prevNode;
+    }
+  });
+
+  it("names separate dev and prod collections", () => {
+    const prev = process.env.MONGODB_COLLECTION;
+    try {
+      delete process.env.MONGODB_COLLECTION;
+      expect(devProdCollections()).toEqual({ dev: "soma_dev_recipes", prod: "soma_prod_recipes" });
+    } finally {
+      if (prev === undefined) delete process.env.MONGODB_COLLECTION;
+      else process.env.MONGODB_COLLECTION = prev;
+    }
   });
 });

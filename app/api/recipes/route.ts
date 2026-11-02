@@ -3,9 +3,9 @@ import { RecipeParseError, parseRecipeMarkdown } from "@/lib/recipes";
 import { getStore } from "@/lib/store";
 import { seedDatabase } from "@/lib/seed";
 
-function ensureSeeded(): void {
+async function ensureSeeded(): Promise<void> {
   try {
-    seedDatabase();
+    await seedDatabase();
   } catch {
     // A seeding failure must not take the API down; the library
     // simply renders whatever is already stored.
@@ -13,7 +13,7 @@ function ensureSeeded(): void {
 }
 
 export async function GET(request: NextRequest): Promise<NextResponse> {
-  ensureSeeded();
+  await ensureSeeded();
   const params = request.nextUrl.searchParams;
   const q = (params.get("q") ?? "").trim().toLowerCase();
   const tag = (params.get("tag") ?? "").trim().toLowerCase();
@@ -21,7 +21,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   const favoritesOnly = params.get("favorite") === "true";
   const sort = params.get("sort") ?? "recent";
 
-  let recipes = getStore().list();
+  let recipes = await (await getStore()).list();
 
   if (favoritesOnly) recipes = recipes.filter((r) => r.favorite);
   if (tag) recipes = recipes.filter((r) => r.tags.includes(tag));
@@ -49,7 +49,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
 }
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
-  ensureSeeded();
+  await ensureSeeded();
   let body: unknown;
   try {
     body = await request.json();
@@ -68,7 +68,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   }
   try {
     const input = parseRecipeMarkdown(markdown);
-    const recipe = getStore().create({ ...input, sourceMarkdown: markdown });
+    const recipe = await (await getStore()).create({ ...input, sourceMarkdown: markdown });
     return NextResponse.json({ recipe }, { status: 201 });
   } catch (error) {
     if (error instanceof RecipeParseError) {

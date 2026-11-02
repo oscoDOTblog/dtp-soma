@@ -28,15 +28,27 @@ npm run build && npm start
 npm run seed  # refill the starter recipes (only when the library is empty)
 ```
 
-Recipes live in SQLite at `./data/recipes.db` (override with `RECIPES_DB_PATH`).
-The first run seeds five starter recipes into an empty database.
+Recipes live in MongoDB Atlas. Dev and prod use separate collections in the
+same database: `soma_dev_recipes` and `soma_prod_recipes` (database defaults to
+`dtp-soma`, override with `MONGODB_DB`). `APP_ENV=dev|prod` selects the
+collection (defaults to `prod` when `NODE_ENV=production`, else `dev`); an
+explicit `MONGODB_COLLECTION` overrides the name entirely.
+The first run creates both collections (with indexes) and seeds five starter
+recipes into the current environment's collection when it is empty.
+
+Set `MONGODB_URI` in server-side env only, never in client code. See
+[.env.example](.env.example) for all variables.
+
+The header toggles light and dark mode; the choice persists per browser and
+otherwise follows the OS preference. While recipes load from Atlas, the library
+and detail pages show skeleton placeholders.
+
+The detail page can email a recipe through coss.com ("Email recipe"). It needs
+a `COSS_API_KEY`: run `npx coss-cli init` and approve the browser prompt to get
+a test key, which records mail without delivering. Going live (verified domain,
+production key) is a dashboard step.
 
 ## Notes on the plan
 
-- The plan's Sites/MongoDB-Atlas split is not available in this environment (no
-  Sites tooling, no Atlas credentials), so this implements the plan's stated
-  fallback: a full app on a Node runtime with SQLite as the source of truth.
-- `lib/store.ts` exposes a `RecipeStore` interface, so the MongoDB API adapter
-  from the plan can replace `SqliteRecipeStore` later without changing the UI.
-- Same-origin API routes need no service credential; if the MongoDB adapter is
-  added later, put its credential in server-side env only, never in client code.
+- `lib/store.ts` exposes a `RecipeStore` interface backed by
+  `MongoRecipeStore`; tests use `InMemoryRecipeStore` so they run without Atlas.

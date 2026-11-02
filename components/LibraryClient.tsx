@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Recipe } from "@/lib/recipes";
+import { LibrarySkeleton } from "./Skeletons";
 
 type SortKey = "recent" | "title" | "quick";
 
@@ -92,8 +93,10 @@ export default function LibraryClient({ initial }: { initial: Recipe[] }) {
 
   return (
     <div>
-      <h1 className="page-title">My Kitchen</h1>
-      <p className="page-sub">Every recipe you have saved, searchable by title, tag, or ingredient.</p>
+      <div className="masthead">
+        <h1 className="page-title">My Kitchen</h1>
+        <p className="page-sub">Every recipe you have saved, searchable by title, tag, or ingredient.</p>
+      </div>
       <div className="stats-strip" aria-label="Library totals">
         <div className="stat">
           <b>{initial.length}</b>
@@ -182,7 +185,12 @@ export default function LibraryClient({ initial }: { initial: Recipe[] }) {
           {error}
         </p>
       )}
-      {loading && <p aria-live="polite">Loading recipes…</p>}
+      {loading && recipes.length === 0 && <LibrarySkeleton />}
+      {loading && recipes.length > 0 && (
+        <p className="refresh-note" aria-live="polite">
+          Updating recipes…
+        </p>
+      )}
 
       {!loading && !error && recipes.length === 0 && (
         <div className="notice">
@@ -202,6 +210,7 @@ export default function LibraryClient({ initial }: { initial: Recipe[] }) {
         </div>
       )}
 
+      {recipes.length > 0 && (
       <ul className="recipe-grid">
         {recipes.map((recipe) => {
           const time = minutesLabel(recipe);
@@ -223,11 +232,7 @@ export default function LibraryClient({ initial }: { initial: Recipe[] }) {
                 </div>
               )}
               <div className="card-foot">
-                {recipe.favorite && (
-                  <span className="star" role="img" aria-label="Favorite">
-                    ★
-                  </span>
-                )}
+                {recipe.favorite && <span className="stamp">Favorite</span>}
                 <button
                   type="button"
                   className="btn btn-small btn-quiet"
@@ -242,6 +247,7 @@ export default function LibraryClient({ initial }: { initial: Recipe[] }) {
           );
         })}
       </ul>
+      )}
     </div>
   );
 }

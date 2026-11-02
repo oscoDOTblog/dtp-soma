@@ -7,7 +7,7 @@ interface Params {
 }
 
 export async function GET(_request: NextRequest, { params }: Params): Promise<NextResponse> {
-  const recipe = getStore().get(params.id);
+  const recipe = await (await getStore()).get(params.id);
   if (!recipe) return NextResponse.json({ error: "Recipe not found." }, { status: 404 });
   return NextResponse.json({ recipe });
 }
@@ -31,7 +31,7 @@ export async function PUT(request: NextRequest, { params }: Params): Promise<Nex
   }
   try {
     const input = parseRecipeMarkdown(markdown);
-    const recipe = getStore().update(params.id, { ...input, sourceMarkdown: markdown });
+    const recipe = await (await getStore()).update(params.id, { ...input, sourceMarkdown: markdown });
     if (!recipe) return NextResponse.json({ error: "Recipe not found." }, { status: 404 });
     return NextResponse.json({ recipe });
   } catch (error) {
@@ -46,7 +46,7 @@ export async function PUT(request: NextRequest, { params }: Params): Promise<Nex
 }
 
 export async function DELETE(_request: NextRequest, { params }: Params): Promise<NextResponse> {
-  const removed = getStore().remove(params.id);
+  const removed = await (await getStore()).remove(params.id);
   if (!removed) return NextResponse.json({ error: "Recipe not found." }, { status: 404 });
   return NextResponse.json({ ok: true });
 }

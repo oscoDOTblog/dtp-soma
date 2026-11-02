@@ -20,7 +20,7 @@ export async function PATCH(request: NextRequest, { params }: Params): Promise<N
   if (typeof favorite !== "boolean") {
     return NextResponse.json({ error: "Provide a boolean `favorite` field." }, { status: 400 });
   }
-  const recipe = getStore().setFavorite(params.id, favorite);
+  const recipe = await (await getStore()).setFavorite(params.id, favorite);
   if (!recipe) return NextResponse.json({ error: "Recipe not found." }, { status: 404 });
   return NextResponse.json({ recipe });
 }

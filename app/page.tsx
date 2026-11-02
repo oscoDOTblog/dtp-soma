@@ -4,12 +4,12 @@ import { seedDatabase } from "@/lib/seed";
 
 export const dynamic = "force-dynamic";
 
-export default function HomePage() {
+export default async function HomePage() {
   try {
-    seedDatabase();
+    await seedDatabase();
   } catch {
     // First-run seeding is best-effort; the page renders whatever exists.
   }
-  const initial = getStore().list();
+  const initial = await (await getStore()).list();
   return <LibraryClient initial={initial} />;
 }

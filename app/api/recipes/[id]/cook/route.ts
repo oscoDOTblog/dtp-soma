@@ -7,7 +7,7 @@ interface Params {
 
 /** Record that the recipe was just cooked. */
 export async function POST(_request: NextRequest, { params }: Params): Promise<NextResponse> {
-  const recipe = getStore().markCooked(params.id);
+  const recipe = await (await getStore()).markCooked(params.id);
   if (!recipe) return NextResponse.json({ error: "Recipe not found." }, { status: 404 });
   return NextResponse.json({ recipe });
 }

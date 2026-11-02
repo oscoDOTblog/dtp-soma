@@ -1,5 +1,5 @@
 import { RecipeInput, parseRecipeMarkdown } from "./recipes";
-import { SqliteRecipeStore, getDb } from "./store";
+import { MongoRecipeStore, collectionName, ensureDevProdCollections } from "./store";
 
 export const SEED_MARKDOWN: string[] = [
   `---
@@ -270,19 +270,32 @@ ingredients:
 `,
 ];
 
-export function seedDatabase(): { seeded: number; skipped: boolean } {
-  const store = new SqliteRecipeStore(getDb());
-  if (store.list().length > 0) return { seeded: 0, skipped: true };
+export async function seedDatabase(): Promise<{ seeded: number; skipped: boolean }> {
+  await ensureDevProdCollections();
+  const store = new MongoRecipeStore(collectionName());
+  if ((await store.list()).length > 0) return { seeded: 0, skipped: true };
   let seeded = 0;
   for (const source of SEED_MARKDOWN) {
     const input: RecipeInput = parseRecipeMarkdown(source);
-    store.create(input);
+    await store.create(input);
     seeded += 1;
   }
   return { seeded, skipped: false };
 }
 
 if (require.main === module) {
-  const result = seedDatabase();
-  console.log(result.skipped ? "Database already has recipes; nothing seeded." : `Seeded ${result.seeded} recipes.`);
+  seedDatabase().then(
+    (result) => {
+      console.log(
+        result.skipped
+          ? "Database already has recipes; nothing seeded."
+          : `Seeded ${result.seeded} recipes into ${collectionName()}.`,
+      );
+      process.exit(0);
+    },
+    (error) => {
+      console.error(error instanceof Error ? error.message : error);
+      process.exit(1);
+    },
+  );
 }
